@@ -24,6 +24,10 @@ library(birdnetR)
 
 # File directories (Change these for your device) ------------------------------
 
+# Set the primary working directory
+main_wd <- "C:\\Users\\willh\\Documents\\NCSU\\Disertation_Code\\BirdNet"
+setwd(main_wd)
+
 # Name of the directory that holds your validation data 
 csv_dir <- "Data"
 
@@ -31,7 +35,7 @@ csv_dir <- "Data"
 flac_dir <- "C:\\Users\\willh\\Documents\\NCSU\\Data\\Audio\\Umstead_Farm_Data"
 
 # Path to save your .wav output files 
-wav_dir <- "Data"
+wav_dir <- "C:\\Users\\willh\\Documents\\NCSU\\Disertation_Code\\BirdNet\\Data"
 
 # Set a path to your FLAC binary file (one file per device)
 flac_exe_dir <- "C:\\Utilities\\flac-1.5.0-win\\Win64"
@@ -165,7 +169,16 @@ for(s in 1:length(species_list)){
   species_file <- str_replace(species_file, " ", "_")
   species_file <- str_replace(species_file, "-", "_")
   
-  dir.create(path = paste0(wav_dir, "\\", species_file), recursive = TRUE)
+  # Path to the folder containing that species audio
+  species_folder <- paste0(wav_dir, "\\", species_file)
+  
+  # Clear the previous versio of the folder 
+  if (dir.exists(species_folder)) {
+    unlink(species_folder, recursive = TRUE)
+  }
+  
+  # Create a new folder for each species
+  dir.create(path = species_folder, recursive = TRUE)
 }
 
 # Define the rows to validate
@@ -205,6 +218,9 @@ class_to_valid <- classifications_weighted %>%
 # 
 # #View
 # glimpse(class_to_valid)
+
+# Counter to show how many species have been processed
+species_counter <- 0
 
 # Loop over the files I need to validate and convert them to wav
 for(i in 1:nrow(class_to_valid)){
@@ -258,7 +274,8 @@ for(i in 1:nrow(class_to_valid)){
   
   # Message after finishing each species 
   if(i %% n_wav == 0){
-    message(paste0("Created .wav files for species ", i/n_valid, " out of ", n_species))
+    species_counter <- species_counter + 1
+    message(paste0("Created .wav files for species ", species_counter, " out of ", n_species))
   }
   
 }

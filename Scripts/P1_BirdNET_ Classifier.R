@@ -21,6 +21,10 @@ library(birdnetR)
 
 # File directories (Change these for your device) ------------------------------
 
+# Set the primary working directory
+main_wd <- "C:\\Users\\willh\\Documents\\NCSU\\Disertation_Code\\BirdNet"
+setwd(main_wd)
+
 # Directory for the folder with all audio data 
 flac_dir <- "C:\\Users\\willh\\Documents\\NCSU\\Data\\Audio\\Umstead_Farm_Data"
 
@@ -44,6 +48,12 @@ output_heading <- "uf_birdnet_classif_2024_"
 
 # Set a minimum confidence level for the classifier
 min_conf <- 0.25
+
+# Path to the csv
+csv_path <- paste0(csv_dir, "\\",
+       output_heading, 
+       "C", str_remove(as.character(min_conf), "0."),
+       ".csv")
 
 # ------------------------------------------------------------------------------
 
@@ -315,10 +325,7 @@ for(i in 1:nARUs){
       rec_ints <- bind_rows(rec_ints, rec_ints_tmp)
       
       # Save the classifications
-      write.csv(classif, paste0(csv_dir, 
-                                output_heading, 
-                                as.character(str_remove(min_conf, ".")),
-                                ".csv"))
+      write.csv(classif, csv_path)
       
       # Message that the model is done with one file
       message("Finished classifying birds in recording ", j, " out of ", nfiles, 
@@ -349,8 +356,5 @@ glimpse(classified)
 print(classified, n = 30)
 
 # Save the classifications
-write.csv(classified, paste0(csv_dir, 
-                             output_heading, 
-                             as.character(str_remove(min_conf, ".")),
-                             ".csv"),
+write.csv(classified, csv_path,
           row.names = FALSE)

@@ -20,14 +20,16 @@ library(shiny)
 library(bslib)
 library(audio)
 
-# Clear environments
-rm(list = ls())
-
 # File Paths (Change these for your device) ------------------------------------
+
+# Set the primary working directory
+main_wd <- "C:\\Users\\willh\\Documents\\NCSU\\Disertation_Code\\BirdNet"
+setwd(main_wd)
+
 # Name of the directory that holds your validation data 
-validations_dir <- "Data"
+validations_dir <- "C:\\Users\\willh\\Documents\\NCSU\\Disertation_Code\\BirdNet"
 # Name of the validation data 
-validations_file <- "uf_validations.csv"
+validations_file <- "Data\\uf_validations.csv"
 # ------------------------------------------------------------------------------
 
 # Combine file directory and name
@@ -35,6 +37,12 @@ file_path <- paste0(validations_dir, "\\", validations_file)
 
 # Define how often you want to autosave 
 save_rate <- 25
+
+# set a minimum confidence threshold
+min_conf <- 0.3
+
+# Bin size for the logiistic regression
+bin_size <- 0.05
 
 # Set working directory to the script's location
 if (interactive() && requireNamespace("rstudioapi", quietly = TRUE)) {
@@ -86,12 +94,20 @@ default_valid_ids <- birds_to_valid %>%
   pull(Voc.ID)
 # default_valid_ids
 
-# Pallette for the pie chart
+# Palette for the pie chart
 pie_pal <- c(
   "Not Validated" = "gray75",
   "True Positive" = "green3",
   "False Positive" = "orangered1"
 )
+
+# Palette for the histogram
+hist_pal <- c(
+  "True Positive" = "green3",
+  "False Positive" = "orangered1"
+)
+
+
 
 # 3) Shiny UI ##################################################################
 
@@ -148,14 +164,21 @@ ui <- page_fluid(
   fluidRow(
     # Plot the vocalization spectrogram
     column(8, class = "mt-1",
-           plotOutput("spectro_plot")
+           plotOutput("spectro_plot", height = "380px")
     ), # End spectro plot
     
     # Plot the progress
     column(4, class = "mt-1",
-           plotOutput("progress_plot") 
-    ) # End progress plot 
-  ),
+           card(
+             card_body(padding = 0,
+           plotOutput("logit_reg", height = "180px")
+           )), # End results  
+           card(
+             card_body(padding = 0,
+             plotOutput("progress_plot", height = "180px")
+           )) # End progress plot
+    ) # End right display plots
+  ), # End display row
   
   # Play the sound
   fluidRow(
@@ -207,7 +230,7 @@ ui <- page_fluid(
   # Navigation -----------------------------------------------------------------
   # ----------------------------------------------------------------------------
   
-  # Start the fourth row
+  # Start the navegation section
   fluidRow(
     
     # Previous option
@@ -277,6 +300,9 @@ server <- function(input, output, session) {
   # Select a species and whether or not to display all rows 
   selected_species <- reactive({
     
+    # Required inputs
+    req(input$species, validations())
+    
     # Filter to a species
     data <- validations() %>% filter(Species == input$species)
     
@@ -287,6 +313,16 @@ server <- function(input, output, session) {
     # Return the selection
     return(data)
   })
+  
+  # Select the vocalization
+  selected_vocalization <- reactive({
+    
+    # Required inputs
+    req(input$voc, selected_species())
+    
+    # Select vocalization
+    selected_species() %>% filter(Voc.ID == input$voc)
+  }) # End vocalization selection
   
   # Update the number of vocalizations whenever species OR filter changes
   observeEvent(c(input$species, input$unval_only), {
@@ -307,11 +343,7 @@ server <- function(input, output, session) {
   total_voc <- reactive({
     validations() %>% filter(Species == input$species) %>% pull(Voc.ID) %>% max()
   }) # End total vocalization reactivity
-  
-  # Select the vocalization
-  selected_vocalization <- reactive({
-    selected_species() %>% filter(Voc.ID == input$voc)
-  }) # End vocalization selection
+
   
   # Update the ID of the vocalization
   voc_id <- reactive({
@@ -321,20 +353,17 @@ server <- function(input, output, session) {
   # ----------------------------------------------------------------------------
   # Display --------------------------------------------------------------------
   # ----------------------------------------------------------------------------
+
+  # Spectrogram ----
   
   # Spectrogram plot render
   output$spectro_plot <- renderPlot({
     
-    # Ensure species is selected
-    req(input$species) 
-    
-    # Define the .wav file path 
+    # Define and check file
     wav_file <- selected_vocalization() %>% pull(File)
-    
-    # Check if file exists to avoid crash
     if(!file.exists(wav_file)) return(NULL)
     
-    # Read in the .wav if it exisits 
+    # Read and Save
     wav <- readWave(wav_file)
     
     # Define the confidence score
@@ -353,6 +382,115 @@ server <- function(input, output, session) {
     
   }) # End spectrogram plot render
   
+  # Logistic regression ----
+  
+  # Render the logistic regression
+  output$logit_reg <- renderPlot({
+
+    # Ensure species is selected
+    req(input$species)
+
+    # Edit the data 
+    logit_reg_dat <- validations() %>% 
+      filter(Species == input$species & !is.na(True.Positive)) %>%
+      select(True.Positive, Confidence) %>%
+      mutate(True.Positive = case_when(True.Positive == 1 ~ "True.Positive",
+                                       True.Positive == 0 ~ "False.Positive"),
+             # Make confidence score discrete 
+             Conf.Bin = 1 + floor(Confidence/bin_size)) %>%
+      mutate(True.Positive = factor(True.Positive,
+                                    levels = c("True.Positive", "False.Positive"))) %>%
+      droplevels() %>% 
+      arrange(Conf.Bin) %>% 
+      count(Conf.Bin, True.Positive) %>% 
+      group_by(Conf.Bin) %>% 
+      pivot_wider(names_from = True.Positive, values_from = n) %>% 
+      # Ensure both columns exist even if one category is missing in the data
+      mutate(True.Positive = if("True.Positive" %in% names(.)) True.Positive else 0,
+             False.Positive = if("False.Positive" %in% names(.)) False.Positive else 0) %>%
+      mutate(across(.cols = everything(), .fns = ~replace_na(., 0))) %>% 
+      mutate(Confidence = Conf.Bin*bin_size, 
+             TP.Rate = True.Positive/(True.Positive + False.Positive)) 
+    
+    # Minimum confidence threshold over 0.95
+    threashhold <- validations() %>%
+      filter(Species == input$species & True.Positive == 1) %>% 
+      arrange(Confidence) %>% 
+      slice_head(n = 1) %>% 
+      pull(Confidence)
+      
+    # Make the plot
+    logit_reg_dat %>% 
+      ggplot(aes(x = Confidence, y = TP.Rate)) +
+      geom_line(color = "lightblue", linewidth = 1.1,  alpha = 1) +
+      geom_point(color = "lightblue", size = 2, alpha = 1) +
+      geom_hline(yintercept = 0.95, color = "gray45", linetype = "dashed", linewidth = 1, alpha = 0.4) +
+      labs(title = paste("Minimum Confidence Score:", threashhold),
+           x = "Confidence",
+           y = "Proportion True Positive") +
+      scale_x_continuous(breaks = seq(from = min_conf, to = 1, by = bin_size*4), limits = c(min_conf, 1)) +
+      scale_y_continuous(limits = c(0, 1), breaks = seq(from = 0, to = 1, by = 0.25)) +
+      guides(fill = guide_legend(ncol = 1, nrow = 2)) +
+      theme_classic() +
+      theme(legend.text = element_text(size = 14),
+            plot.title = element_text(size = 14),
+            axis.title = element_text(size = 14),
+            axis.text.x = element_text(size = 14),
+            legend.position = "bottom",
+            legend.title = element_blank())
+    
+  }) # End logistic regression render  
+  
+  # Histogram ----
+  
+  # # Histograms of true and false positives 
+  # output$conf_hist <- renderPlot({
+  #   
+  #   # Ensure species is selected
+  #   req(input$species) 
+  #   
+  #   # Pull out only the validated rows 
+  #   valid_dat <- validations() %>% 
+  #     filter(Species == input$species & !is.na(True.Positive)) %>% 
+  #     select(True.Positive, Confidence) %>% 
+  #     mutate(True.Positive = case_when(True.Positive == 1 ~ "True Positive",
+  #                                      True.Positive == 0 ~ "False Positive")) %>% 
+  #     mutate(True.Positive = factor(True.Positive, 
+  #                                   levels = c("True Positive", "False Positive"))) %>% 
+  #     droplevels()
+  #   
+  #   # Find the highest confidence score for a false positive 
+  #   # false_pos <- valid_dat %>% 
+  #     # filter(True.Positive == 0)
+  #   
+  #   # set line to zero if there are no false positives yet
+  #   # max_false <- ifelse(length(false_pos) > 0, max(false_pos$Confidence), 0.01)
+  #   
+  #   # Historgram of confidence scores color-coded by true positive status 
+  #   valid_dat %>% 
+  #     ggplot(aes(x = Confidence, 
+  #                # colour = True.Positive, 
+  #                fill = True.Positive)) +
+  #     geom_histogram(alpha = 0.25) + 
+  #     # geom_vline(xintercept = max_false) +
+  #     scale_fill_manual(values = hist_pal) +
+  #     # scale_color_manual(values = hist_pal) +
+  #     labs(title = "Histogram of Confidence Scores",
+  #          x = "Confidence",
+  #          y = "Frequency") +
+  #     scale_x_continuous(limits = c(0, 1)) +
+  #     guides(fill = guide_legend(ncol = 1, nrow = 2)) +
+  #     theme_classic() +
+  #     theme(plot.title = element_text(size = 14),
+  #           legend.text = element_text(size = 12),
+  #           axis.title = element_text(size = 12),
+  #           axis.text.x = element_text(size = 12),
+  #           legend.position = "bottom",
+  #           legend.title = element_blank()) 
+  #     
+  #   
+  # }) # End histogram of confidence scores 
+  
   # Pie chart of proportion validated 
   output$progress_plot <- renderPlot({
     
@@ -370,18 +508,18 @@ server <- function(input, output, session) {
                                                "True Positive", 
                                                "False Positive")))
     
-    # Plot 
+    # Plot progress
     progress_dat %>% 
       ggplot(aes(x = "", fill = True.Positive, col = True.Positive)) +
       geom_bar(width = 1) +
       scale_fill_manual(values = pie_pal) +
       scale_color_manual(values = pie_pal) +
       coord_polar("y", start = 0) +
-      labs(title = "            Validation Progress") +
+      labs(title = "Validation Progress") +
       guides(fill = guide_legend(ncol = 1, nrow = 3)) +
       theme_void() +
-      theme(plot.title = element_text(size = 18),
-            legend.text = element_text(size = 14),
+      theme(plot.title = element_text(size = 14),
+            legend.text = element_text(size = 12),
             legend.position = "bottom",
             legend.title = element_blank()) 
     
